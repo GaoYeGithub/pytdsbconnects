@@ -1,12 +1,12 @@
+import os
+import json
 import discord
 import asyncio
 import datetime
 import tdsbconnects
-import json
 from getpass import getpass
-import os
 
-TOKEN = os.getenv('DISCORD_BOT_TOKEN')
+TOKEN = 'UR_DISCORD_TOKEN'
 intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
@@ -59,42 +59,60 @@ async def get_tdsb_data(username, password, date):
 async def on_ready():
     print(f'Logged in as {client.user}!')
 
+async def get_user_timetable(username, password, date):
+    async with tdsbconnects.TDSBConnects() as session:
+        await session.login(username, password)
+        info = await session.get_user_info()
+        school = info.schools[0]
+        timetable = await school.timetable(date)
+        return timetable
+
 @client.event
 async def on_message(message):
     if message.author == client.user:
         return
 
-    if message.content.startswith('!getinfo'):
-        await message.channel.send("Please enter your TDSB username:")
+    if message.content.startswith('!compare'):
+        def check(m):
+            return m.author == message.author and m.channel == message.channel
 
-        def check_username(msg):
-            return msg.author == message.author and msg.channel == message.channel
+        await message.channel.send('Please enter your username:')
+        username = await client.wait_for('message', check=check)
+        await message.channel.send('Please enter your password:')
+        password = await client.wait_for('message', check=check)
+        await message.channel.send('Please enter the date you want to compare (YYYY-MM-DD):')
+        date_input = await client.wait_for('message', check=check)
 
-        username_msg = await client.wait_for('message', check=check_username)
-        username = username_msg.content
+        date = datetime.datetime.strptime(date_input.content, "%Y-%m-%d")
 
-        await message.channel.send("Please enter your TDSB password:")
+        user_timetable = await get_user_timetable(username.content, password.content, date)
+        my_timetable = await get_user_timetable('UR_USERNAME', 'UR_PASSWORD', date)
 
-        def check_password(msg):
-            return msg.author == message.author and msg.channel == message.channel
+        shared_classes = []
+        for user_class in user_timetable:
+            for my_class in my_timetable:
+                if (user_class.course_code == my_class.course_code and
+                    user_class.course_start == my_class.course_start and
+                    user_class.course_end == my_class.course_end):
+                    shared_classes.append({
+                        'period': user_class.course_period,
+                        'course_name': user_class.course_name,
+                        'course_code': user_class.course_code,
+                        'course_start': user_class.course_start,
+                        'course_end': user_class.course_end,
+                        'teacher': user_class.course_teacher_name,
+                    })
 
-        password_msg = await client.wait_for('message', check=check_password)
-        password = password_msg.content
-
-        await message.channel.send("Please enter the date (YYYY-MM-DD) to get your timetable:")
-
-        def check_date(msg):
-            return msg.author == message.author and msg.channel == message.channel
-
-        date_msg = await client.wait_for('message', check=check_date)
-        date = date_msg.content
-
-        await message.channel.send("Fetching your information...")
-
-        try:
-            user_data = await get_tdsb_data(username, password, date)
-            await message.channel.send("Information fetched successfully! Here is your data:", file=discord.File("user_data.json"))
-        except Exception as e:
-            await message.channel.send(f"An error occurred: {str(e)}")
+        if shared_classes:
+            response = "**We have the following classes together:**\n\n"
+            for c in shared_classes:
+                response += (f"**Period {c['period']}**\n"
+                             f"> **Course**: *{c['course_name']}*\n"
+                             f"> **Code**: `{c['course_code']}`\n"
+                             f"> **Time**: `{c['course_start']}` to `{c['course_end']}`\n"
+                             f"> **Teacher**: *{c['teacher']}*\n\n")
+            await message.channel.send(response)
+        else:
+            await message.channel.send("**We don't have any classes together on that day.**")
 
 client.run(TOKEN)
