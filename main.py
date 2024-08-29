@@ -1,14 +1,19 @@
+import discord
 import asyncio
 import datetime
 import tdsbconnects
 import json
 from getpass import getpass
+import os
 
-async def main():
+TOKEN = os.getenv('DISCORD_BOT_TOKEN')
+intents = discord.Intents.default()
+intents.message_content = True
+client = discord.Client(intents=intents)
+
+async def get_tdsb_data(username, password, date):
     async with tdsbconnects.TDSBConnects() as session:
-        print("Logging in")
-        await session.login(input("Username: "), getpass())
-        print("Getting info")
+        await session.login(username, password)
         info = await session.get_user_info()
         
         user_data = {
@@ -23,8 +28,8 @@ async def main():
             }
         }
 
-        date = datetime.datetime.strptime(input("Enter a date to get your timetable for (YYYY-MM-DD): "), "%Y-%m-%d")
-        timetable = await info.schools[0].timetable(date)
+        timetable_date = datetime.datetime.strptime(date, "%Y-%m-%d")
+        timetable = await info.schools[0].timetable(timetable_date)
         
         if timetable:
             user_data["timetable"] = {
@@ -48,6 +53,48 @@ async def main():
         with open("user_data.json", "w") as json_file:
             json.dump(user_data, json_file, indent=4)
 
-        print("Data saved to user_data.json")
+        return user_data
 
-asyncio.get_event_loop().run_until_complete(main())
+@client.event
+async def on_ready():
+    print(f'Logged in as {client.user}!')
+
+@client.event
+async def on_message(message):
+    if message.author == client.user:
+        return
+
+    if message.content.startswith('!getinfo'):
+        await message.channel.send("Please enter your TDSB username:")
+
+        def check_username(msg):
+            return msg.author == message.author and msg.channel == message.channel
+
+        username_msg = await client.wait_for('message', check=check_username)
+        username = username_msg.content
+
+        await message.channel.send("Please enter your TDSB password:")
+
+        def check_password(msg):
+            return msg.author == message.author and msg.channel == message.channel
+
+        password_msg = await client.wait_for('message', check=check_password)
+        password = password_msg.content
+
+        await message.channel.send("Please enter the date (YYYY-MM-DD) to get your timetable:")
+
+        def check_date(msg):
+            return msg.author == message.author and msg.channel == message.channel
+
+        date_msg = await client.wait_for('message', check=check_date)
+        date = date_msg.content
+
+        await message.channel.send("Fetching your information...")
+
+        try:
+            user_data = await get_tdsb_data(username, password, date)
+            await message.channel.send("Information fetched successfully! Here is your data:", file=discord.File("user_data.json"))
+        except Exception as e:
+            await message.channel.send(f"An error occurred: {str(e)}")
+
+client.run(TOKEN)
